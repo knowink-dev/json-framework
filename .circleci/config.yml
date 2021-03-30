@@ -1,0 +1,78 @@
+version: 2.1
+
+executors:
+    default:
+        macos:
+            xcode: 11.3.1
+
+workflows:
+    publish:
+        jobs:
+            - pod-trunk-push:
+                filters:
+                    tags:
+                        only: /v\d+\.\d+\.\d+([-+].+)?/
+                    branches:
+                        ignore: /.*/
+
+    build-and-test:
+        jobs:
+            - build:
+                name: build-ios
+                scheme: SBJson5_iOS
+                destination: platform=iOS Simulator,name=iPhone 11
+            - build:
+                name: build-mac
+                scheme: SBJson5_macOS
+                destination: platform=macOS,arch=x86_64
+            - pod-lib-lint
+            - carthage-build
+
+jobs:
+    build:
+        executor: default
+        parameters:
+            scheme:
+                type: string
+            destination:
+                type: string
+        steps:
+            - checkout
+            - run:
+                name: Run tests
+                command: >
+                    xcodebuild test
+                    -scheme <<parameters.scheme>>
+                    -destination "<<parameters.destination>>"
+                    | xcpretty
+                environment:
+                    GCC_INSTRUMENT_PROGRAM_FLOW_ARCS: YES
+                    GCC_GENERATE_TEST_COVERAGE_FILES: YES
+            - run: bash <(curl -s https://codecov.io/bash)
+
+    pod-lib-lint:
+        executor: default
+        steps:
+            - checkout
+            - run: sed "s/%VERSION%/$CIRCLE_BUILD_NUM/" RELEASING/SBJson.template.podspec > SBJson.podspec
+            - run: pod lib lint
+
+    pod-trunk-push:
+        executor: default
+        steps:
+            - checkout
+            - run: sed "s/%VERSION%/${CIRCLE_TAG##v}/" RELEASING/SBJson.template.podspec > SBJson.podspec
+            - restore_cache:
+                key: v1-auth
+            - run: test -f ~/.netrc || pod trunk register stig@brautaset.org --description=cci
+            - save_cache:
+                key: v1-auth
+                paths:
+                    - ~/.netrc
+            - run: pod trunk push
+
+    carthage-build:
+        executor: default
+        steps:
+            - checkout
+            - run: carthage build --no-skip-current
